@@ -1,0 +1,129 @@
+import 'dart:typed_data';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
+
+class StorageService {
+  final FirebaseStorage _storage = FirebaseStorage.instance;
+
+  static const int _maxUploadBytes = 5 * 1024 * 1024;
+  // storage.rules allows verification photos up to 10 MB (vs 5 MB for
+  // everything else) since selfie/ID legibility matters more than for job
+  // photos. The client check was previously stricter than the server rule,
+  // causing a high-res but otherwise-valid photo to be rejected locally
+  // before it ever reached Storage — one contributor to "uploads fail
+  // intermittently."
+  static const int _maxVerificationUploadBytes = 10 * 1024 * 1024;
+
+  /// Upload a job image. The path includes [userId] so Storage rules can
+  /// verify that only the uploader can write to their own sub-folder:
+  ///   jobs/{jobId}/{userId}/image_{index}.jpg
+  Future<String> uploadJobImageBytes({
+    required String jobId,
+    required String userId,
+    required int index,
+    required Uint8List bytes,
+  }) async {
+    if (bytes.isEmpty) throw Exception('Image payload is empty.');
+    if (bytes.lengthInBytes > _maxUploadBytes) {
+      throw Exception('Image exceeds the 5 MB limit.');
+    }
+
+    final path = 'jobs/$jobId/$userId/image_$index.jpg';
+    final ref = _storage.ref(path);
+    final metadata = SettableMetadata(
+      contentType: 'image/jpeg',
+      customMetadata: {'jobId': jobId, 'userId': userId, 'index': '$index'},
+    );
+
+    final task = await ref.putData(bytes, metadata);
+    return await task.ref.getDownloadURL();
+  }
+
+  /// Upload a profile photo.
+  Future<String> uploadProfilePhoto({
+    required String userId,
+    required Uint8List bytes,
+  }) async {
+    if (bytes.lengthInBytes > _maxUploadBytes) {
+      throw Exception('Photo exceeds the 5 MB limit.');
+    }
+    final path = 'users/$userId/profile.jpg';
+    final ref = _storage.ref(path);
+    final task = await ref.putData(
+      bytes,
+      SettableMetadata(contentType: 'image/jpeg'),
+    );
+    return await task.ref.getDownloadURL();
+  }
+
+  /// Upload a verification photo (selfie or government ID).
+  /// Path: verifications/{userId}/{type}.jpg
+  /// [type] is 'selfie' or 'id_front'.
+  Future<String> uploadVerificationPhoto({
+    required String userId,
+    required String type,
+    required Uint8List bytes,
+  }) async {
+    if (bytes.isEmpty) {
+      throw Exception('$type photo is empty — please retake it.');
+    }
+    if (bytes.lengthInBytes > _maxVerificationUploadBytes) {
+      throw Exception('$type photo exceeds the 10 MB limit.');
+    }
+    final path = 'verifications/$userId/$type.jpg';
+    final ref = _storage.ref(path);
+    debugPrint('[StorageService] upload started: $path (${bytes.lengthInBytes} bytes)');
+    final task = await ref.putData(
+      bytes,
+      SettableMetadata(
+        contentType: 'image/jpeg',
+        customMetadata: {'userId': userId, 'type': type},
+      ),
+    );
+    final url = await task.ref.getDownloadURL();
+    debugPrint('[StorageService] upload completed: $path');
+    return url;
+  }
+
+  /// Upload an artisan portfolio image.
+  /// Path: artisan_portfolio/{artisanId}/image_{index}.jpg
+  Future<String> uploadPortfolioImage({
+    required String artisanId,
+    required int index,
+    required Uint8List bytes,
+  }) async {
+    if (bytes.lengthInBytes > _maxUploadBytes) {
+      throw Exception('Image exceeds the 5 MB limit.');
+    }
+    final path = 'artisan_portfolio/$artisanId/image_$index.jpg';
+    final ref = _storage.ref(path);
+    final task = await ref.putData(
+      bytes,
+      SettableMetadata(contentType: 'image/jpeg'),
+    );
+    return await task.ref.getDownloadURL();
+  }
+
+  /// Delete a portfolio image given its download URL.
+  Future<void> deletePortfolioImage(String url) =>
+      _storage.refFromURL(url).delete();
+
+  /// Upload a dispute evidence photo.
+  Future<String> uploadDisputeEvidence({
+    required String disputeId,
+    required String userId,
+    required int index,
+    required Uint8List bytes,
+  }) async {
+    if (bytes.lengthInBytes > _maxUploadBytes) {
+      throw Exception('Photo exceeds the 5 MB limit.');
+    }
+    final path = 'disputes/$disputeId/$userId/evidence_$index.jpg';
+    final ref = _storage.ref(path);
+    final task = await ref.putData(
+      bytes,
+      SettableMetadata(contentType: 'image/jpeg'),
+    );
+    return await task.ref.getDownloadURL();
+  }
+}

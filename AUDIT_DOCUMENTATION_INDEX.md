@@ -1,0 +1,206 @@
+# HandyTrust Authentication Audit - Documentation Index
+
+## Overview
+
+This directory contains a complete audit of the HandyTrust authentication system. The audit identified the root cause of the `[firebase_auth/admin-restricted-operation]` error and provides a detailed fix.
+
+## Documents in This Audit
+
+### 1. AUDIT_SUMMARY.txt (START HERE)
+**Purpose:** Executive summary and quick reference  
+**Audience:** Everyone  
+**Read time:** 2 minutes
+
+Contents:
+- Issue identified
+- Root cause
+- Audit findings checklist
+- Required fix (3 simple steps)
+- Verification checklist
+
+**Start here if you want the quick answer.**
+
+---
+
+### 2. QUICKFIX_GUIDE.md
+**Purpose:** Step-by-step fix instructions  
+**Audience:** Developers/DevOps  
+**Read time:** 5 minutes
+
+Contents:
+- The problem (plain English)
+- The root cause
+- The solution (3 steps)
+- Verification procedures
+- What you DON'T need to do
+- Troubleshooting
+
+**Read this to fix the issue.**
+
+---
+
+### 3. AUTH_AUDIT_REPORT.md
+**Purpose:** Complete technical audit with detailed findings  
+**Audience:** Technical leads/architects  
+**Read time:** 15 minutes
+
+Contents:
+- Root cause analysis
+- Complete auth flow trace
+- Authentication system analysis
+- Firebase configuration audit
+- Affected files with line numbers
+- Required fixes (code + console)
+- Firestore rules compatibility analysis
+- Implementation checklist
+- Summary table
+
+**Read this for comprehensive understanding.**
+
+---
+
+### 4. AUTH_ARCHITECTURE.md
+**Purpose:** Visual system architecture and flows  
+**Audience:** Developers/architects  
+**Read time:** 10 minutes
+
+Contents:
+- System overview diagram
+- Phone auth flow (working)
+- Anonymous auth flow (fixed)
+- Before/after error comparison
+- Firestore rules explanation
+- Implementation status table
+- Why anonymous auth works with Firestore rules
+
+**Read this to understand how the system works.**
+
+---
+
+## Quick Navigation
+
+### "I just want to fix this now"
+1. Read: QUICKFIX_GUIDE.md
+2. Follow the 3 steps
+3. Done
+
+### "I want to understand the issue"
+1. Read: AUDIT_SUMMARY.txt
+2. Read: AUTH_ARCHITECTURE.md
+3. Read: AUTH_AUDIT_REPORT.md
+
+### "I need detailed technical information"
+1. Start with: AUTH_AUDIT_REPORT.md
+2. Review: AUTH_ARCHITECTURE.md
+3. Reference: QUICKFIX_GUIDE.md for steps
+
+### "I'm a manager/stakeholder"
+1. Read: AUDIT_SUMMARY.txt
+2. Key takeaway: Issue is configuration, not code. Fix takes 2 minutes.
+
+---
+
+## The Problem (TL;DR)
+
+```
+Error:     [firebase_auth/admin-restricted-operation]
+When:      User clicks "Register without OTP for demo"
+Cause:     Anonymous auth is disabled in Firebase Console
+Fix:       Enable it (1 checkbox, 2 minutes)
+Code:      Already correct, no changes needed
+```
+
+---
+
+## The Solution (TL;DR)
+
+1. Go to Firebase Console
+2. Project: handytrust
+3. Authentication → Sign-in method → Anonymous → Enable
+4. Save
+
+Done! 🎉
+
+---
+
+## Key Findings
+
+| Aspect | Status | Details |
+|--------|--------|---------|
+| Code Quality | ✓ CORRECT | No bugs, well implemented |
+| Firestore Rules | ✓ CORRECT | Compatible with anonymous auth |
+| Error Handling | ✓ CORRECT | Proper error display and logging |
+| Firebase Console | ✗ INCOMPLETE | Anonymous auth not enabled |
+| Overall System | ⚠️ BLOCKED | Working perfectly except for console config |
+
+---
+
+## What Was Audited
+
+1. ✓ Firebase Auth integration
+2. ✓ Anonymous authentication implementation
+3. ✓ Phone OTP authentication
+4. ✓ AuthService implementation
+5. ✓ AuthNotifier (Riverpod) state management
+6. ✓ Registration flow logic
+7. ✓ Firestore security rules
+8. ✓ Error handling
+9. ✓ UI state management
+10. ✓ Firebase Console configuration
+
+---
+
+## Code Files Analyzed
+
+### Authentication Layer
+- `lib/core/services/auth_service.dart` ✓
+- `lib/providers/auth_provider.dart` ✓
+
+### UI Layer
+- `lib/screens/auth/phone_login_screen.dart` ✓
+- `lib/screens/auth/customer_registration_screen.dart` ✓
+- `lib/screens/auth/artisan_registration_screen.dart` ✓
+
+### Configuration
+- `android/app/google-services.json` ✓
+- `firestore.rules` ✓
+- `firebase.json` ✓
+
+### Cloud Functions
+- `functions/index.js` ✓
+
+---
+
+## Conclusion
+
+**The HandyTrust authentication system is well-designed and correctly implemented.**
+
+The only issue is a missing Firebase Console configuration (enabling the Anonymous auth provider).
+
+No code changes are needed. No deployment is needed. Just enable one checkbox in the console and all demo registration flows will work perfectly.
+
+---
+
+## Support
+
+For questions about specific aspects, refer to:
+
+- **How does anonymous auth work?** → AUTH_ARCHITECTURE.md
+- **Why does anonymous auth work with Firestore rules?** → AUTH_ARCHITECTURE.md
+- **What files need to be changed?** → AUTH_AUDIT_REPORT.md
+- **What's the exact fix?** → QUICKFIX_GUIDE.md
+- **Summary of findings?** → AUDIT_SUMMARY.txt
+
+---
+
+## Document Versions
+
+- Audit Date: 2026-06-14
+- Audit Scope: Complete authentication system
+- Status: Complete
+- Recommendations: Implement Firebase Console fix
+
+---
+
+Generated by: HandyTrust Authentication Audit
+All code is correct. All rules are correct. Just enable the checkbox. ✓

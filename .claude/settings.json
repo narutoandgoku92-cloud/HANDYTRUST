@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs cat)",
+      "Bash(flutter --version)",
+      "Bash(flutter clean *)",
+      "Bash(flutter build *)",
+      "Bash(timeout 600 bash -c 'until [ -f \"build/app/outputs/flutter-apk/app-debug.apk\" ] || grep -q \"BUILD FAILED\\\\|BUILD SUCCESSFUL\" <\\(tail -f /dev/null\\); do sleep 3; done; echo \"Build process completed\"; tail -50 \"C:\\\\Users\\\\gbola\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-gbola-OneDrive-Pictures-flutter-handy-trust\\\\20e69745-2979-4c7f-9ca8-7858baff218d\\\\tasks\\\\bwrjsgj2i.output\" 2>&1 | tail -30')",
+      "Bash(flutter analyze *)",
+      "Bash(cat)",
+      "Read(//tmp/**)",
+      "Bash(.\\\\gradlew --version)",
+      "PowerShell(Get-Process | Where-Object {$_.ProcessName -match \"gradle|java|dart\"})",
+      "PowerShell(flutter emulators)",
+      "PowerShell(flutter emulators --launch Pixel_8)",
+      "PowerShell(Get-Process | Where-Object {$_.ProcessName -match \"dart|java\"} | Select-Object ProcessName, Id, CPU | Sort-Object CPU -Descending | Select-Object -First 10)",
+      "PowerShell(Get-Process | Where-Object {$_.ProcessName -match \"dart|gradle\"} | Measure-Object)",
+      "Read(//c/Users/gbola/AppData/Local/Temp/claude/c--Users-gbola-OneDrive-Pictures-flutter-handy-trust/20e69745-2979-4c7f-9ca8-7858baff218d/tasks/**)",
+      "PowerShell(Get-Process -Name \"dart\" -ErrorAction SilentlyContinue | Select-Object ProcessName, Id, @{Name=\"RuntimeSecs\";Expression={[math]::Round\\(\\(Get-Date - $_.StartTime\\).TotalSeconds\\)}} | ForEach-Object {if \\($_.Id -ne $null\\) { \"$\\($_.ProcessName\\) \\(PID: $\\($_.Id\\)\\) - Running for $\\($_.RuntimeSecs\\)s\" } })",
+      "PowerShell(Get-Process | Where-Object {$_.ProcessName -match \"emulator|adb|dart\"} | Measure-Object | Select-Object -ExpandProperty Count)",
+      "Bash(node --check index.js)",
+      "Bash(node --check functions/index.js)",
+      "Bash(grep -rn \"//.*AppColors\\\\.\\\\|import.*app_theme\" lib --include=\"*.dart\")",
+      "Bash(dart fix *)",
+      "Bash(python3 fix_const.py)",
+      "Bash(grep -n 'Error: $e\\\\|'\\\\''No.*found'\\\\''\\\\|'\\\\''No.*yet'\\\\''' lib/screens/admin/admin_dashboard_screen.dart)",
+      "Bash(grep -n 'Error: $e\\\\|'\\\\''No artisans found'\\\\''\\\\|'\\\\''No users found'\\\\''\\\\|'\\\\''No reviews yet'\\\\''\\\\|'\\\\''No support tickets'\\\\''' lib/screens/admin/admin_dashboard_screen.dart)",
+      "Bash(grep -n 'Error: $e\\\\|'\\\\''No users found'\\\\''\\\\|'\\\\''No reviews yet'\\\\''\\\\|'\\\\''No support tickets'\\\\''' lib/screens/admin/admin_dashboard_screen.dart)",
+      "Bash(grep -n 'Error: $e\\\\|'\\\\''No support tickets'\\\\''\\\\|'\\\\''No reviews yet'\\\\''' lib/screens/admin/admin_dashboard_screen.dart)",
+      "Bash(dart format *)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\gbola\\.claude\\projects\\c--Users-gbola-OneDrive-Pictures-flutter-handy-trust\\memory"
+    ]
+  }
+}

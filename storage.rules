@@ -1,0 +1,63 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isSignedIn() {
+      // Block anonymous sessions from Storage writes
+      return request.auth != null &&
+        !request.auth.token.firebase.sign_in_provider.matches('anonymous');
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+
+    // Job images — only the customer or artisan on that job may upload.
+    // The jobId is embedded in the path; the caller must also embed their uid
+    // as the first path segment so we can verify ownership:
+    //   /jobs/{jobId}/{uid}/{filename}
+    match /jobs/{jobId}/{uid}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(uid)
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Profile photos and verification documents
+    match /users/{uid}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(uid)
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Artisan portfolio photos — publicly viewable like the rest of the
+    // artisan profile, owner-write only.
+    match /artisan_portfolio/{uid}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(uid)
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    // Verification documents (selfie, government ID)
+    match /verifications/{uid}/{allPaths=**} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow write: if isOwner(uid)
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    // Dispute evidence photos
+    match /disputes/{disputeId}/{uid}/{allPaths=**} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(uid)
+        && request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+  }
+}

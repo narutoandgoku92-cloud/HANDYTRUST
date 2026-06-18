@@ -1,0 +1,383 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Helpers ────────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null && !request.auth.token.firebase.sign_in_provider.matches('anonymous');
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function getJob(jobId) {
+      return get(/databases/$(database)/documents/jobs/$(jobId)).data;
+    }
+
+    function jobExists(jobId) {
+      return exists(/databases/$(database)/documents/jobs/$(jobId));
+    }
+
+    function isJobParty(jobData) {
+      return request.auth.uid == jobData.customerId ||
+             request.auth.uid == jobData.artisanId;
+    }
+
+    // ─── Users ──────────────────────────────────────────────────────────────
+    // Only the owner or admin can read a profile.
+    // Anonymous and cross-user reads are blocked to protect phone numbers / PII.
+    match /users/{uid} {
+      allow read: if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid) &&
+        request.resource.data.uid == uid &&
+        request.resource.data.name is string &&
+        request.resource.data.name.size() >= 2;
+      // accountStatus ('active'/'suspended') is admin-only — an owner must
+      // not be able to un-suspend themselves.
+      allow update: if isAdmin() ||
+        (isOwner(uid) &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['accountStatus']));
+      allow delete: if isAdmin();
+    }
+
+    // ─── Artisans ───────────────────────────────────────────────────────────
+    // Public read requires BOTH approval (admin-reviewed profile) AND a
+    // verified identity (selfie + government ID reviewed) — unverified
+    // artisans must not be publicly discoverable.
+    match /artisans/{uid} {
+      allow read: if isSignedIn() && (
+        (resource.data.approvalStatus == 'approved' &&
+         resource.data.verificationStatus in ['id_verified', 'trusted']) ||
+        isOwner(uid) ||
+        isAdmin()
+      );
+      allow create: if isOwner(uid) && request.resource.data.uid == uid &&
+        request.resource.data.approvalStatus == 'pending';
+      // Owner can update non-sensitive fields; rating/stats managed by Cloud Functions.
+      // verificationStatus may only be self-escalated to 'id_submitted' —
+      // 'id_verified'/'trusted' are admin-only, granted via VerificationService.
+      allow update: if isAdmin() ||
+        (isOwner(uid) &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['rating', 'totalRatings', 'completedJobs', 'totalJobs',
+                     'trustScore', 'approvalStatus', 'isVerified',
+                     'cancelledJobsCount', 'cancellationRatePercent',
+                     'openDisputeCount', 'responseRatePercent',
+                     'accountStatus']) &&
+          (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['verificationStatus']) ||
+            request.resource.data.verificationStatus in ['unverified', 'id_submitted']));
+      allow delete: if isAdmin();
+    }
+
+    // ─── Artisan private data (bank details, ID docs) ────────────────────────
+    match /artisan_private/{uid} {
+      allow read:  if isOwner(uid) || isAdmin();
+      allow write: if isOwner(uid) || isAdmin();
+    }
+
+    // ─── Jobs ───────────────────────────────────────────────────────────────
+    match /jobs/{jobId} {
+      // Approved+verified artisans may also read jobs still open for
+      // quoting (no artisan assigned yet) — powers the Open Jobs Feed and
+      // lets an interested artisan view job details before quoting/chatting.
+      allow read: if isSignedIn() && (
+        resource.data.customerId == request.auth.uid ||
+        resource.data.artisanId  == request.auth.uid ||
+        (resource.data.status == 'requested' && isArtisanEligible(request.auth.uid)) ||
+        isAdmin()
+      );
+
+      // Customer creates job — must start in 'requested' status
+      allow create: if isSignedIn() &&
+        request.resource.data.customerId == request.auth.uid &&
+        request.resource.data.status == 'requested';
+
+      // Validated state machine transitions
+      allow update: if isSignedIn() && _isValidJobTransition(jobId);
+
+      // Either party may record the negotiated price while in chat.
+      // JobService.sendNegotiation writes agreedAmount + the three consistency
+      // fields atomically — all four keys must be allowed together.
+      // Intentionally separate from _isValidJobTransition — no status change occurs.
+      allow update: if isSignedIn() &&
+        (resource.data.customerId == request.auth.uid ||
+         resource.data.artisanId  == request.auth.uid) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['agreedAmount', 'lastUpdatedAt', 'lastUpdatedBy', 'updateVersion']) &&
+        resource.data.status == 'inChat';
+
+      allow delete: if isAdmin();
+
+      // ─── Audit logs (sub-collection per job) — IMMUTABLE ─────────────────
+      // Written server-side by JobService inside every transaction.
+      // Job parties may create (via JobService transaction); no client can
+      // update or delete — the audit trail is permanent.
+      match /auditLogs/{logId} {
+        allow read:   if isSignedIn() && (isJobParty(getJob(jobId)) || isAdmin());
+        allow create: if isSignedIn() && isJobParty(getJob(jobId));
+        allow update: if false;
+        allow delete: if false;
+      }
+
+      // ─── Messages (sub-collection per job) ───────────────────────────────
+      // An eligible artisan may also chat about a still-open job before
+      // being matched ("interested" pre-quote chat) — same population that
+      // can already see the job via the read rule above.
+      match /messages/{msgId} {
+        allow read: if isSignedIn() && jobExists(jobId) &&
+          (isJobParty(getJob(jobId)) ||
+            (getJob(jobId).status == 'requested' && isArtisanEligible(request.auth.uid)));
+        allow create: if isSignedIn() && jobExists(jobId) &&
+          (isJobParty(getJob(jobId)) ||
+            (getJob(jobId).status == 'requested' && isArtisanEligible(request.auth.uid))) &&
+          request.resource.data.senderId == request.auth.uid &&
+          request.resource.data.jobId == jobId;
+        allow update: if isSignedIn() &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['isRead']);
+        allow delete: if false;
+      }
+
+      // ─── Quotes (sub-collection per job) ─────────────────────────────────
+      // Document ID == artisanId. This structurally enforces "one active
+      // quote per artisan per job" — a resubmission overwrites the same
+      // document instead of creating a second, competing one.
+      match /quotes/{quoteId} {
+        // An artisan can always read back their own quote (doc ID ==
+        // artisanId), even pre-match — isJobParty() alone would only allow
+        // this after acceptance, which broke the "Edit Quote" UI state.
+        allow read:  if isSignedIn() && jobExists(jobId) &&
+          (isJobParty(getJob(jobId)) || quoteId == request.auth.uid);
+
+        // Only an approved + verified artisan may quote, only while the
+        // job is still open, and only on their own quote document.
+        allow create: if isSignedIn() && jobExists(jobId) &&
+          quoteId == request.auth.uid &&
+          request.resource.data.artisanId == request.auth.uid &&
+          getJob(jobId).customerId != request.auth.uid &&
+          getJob(jobId).status == 'requested' &&
+          isArtisanEligible(request.auth.uid) &&
+          request.resource.data.status == 'pending' &&
+          request.resource.data.amount is number &&
+          request.resource.data.amount > 0 &&
+          request.resource.data.artisanVerified == true;
+
+        allow update: if isSignedIn() && (
+          // Artisan edits price/duration/notes or withdraws while pending.
+          (resource.data.artisanId == request.auth.uid &&
+            resource.data.status == 'pending' &&
+            isArtisanEligible(request.auth.uid) &&
+            request.resource.data.artisanId == resource.data.artisanId &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'amount', 'durationDays', 'notes', 'status', 'updatedAt',
+              'artisanName', 'artisanRating', 'artisanTrustTier',
+              'artisanVerified', 'artisanProfileImageUrl'
+            ]) &&
+            request.resource.data.status in ['pending', 'withdrawn'] &&
+            request.resource.data.artisanVerified == true) ||
+          // Customer (job owner) accepts/closes via JobService.acceptQuote,
+          // or rejects a single quote directly — status-only change.
+          (getJob(jobId).customerId == request.auth.uid &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
+            request.resource.data.status in ['accepted', 'closed', 'rejected'])
+        );
+        allow delete: if false;
+      }
+    }
+
+    // An artisan may only be matched into a job while approved AND verified —
+    // mirrors the discoverability gate on /artisans so the same eligibility
+    // cannot be bypassed by hiring an artisan the client already knows about.
+    function isArtisanEligible(artisanId) {
+      let a = get(/databases/$(database)/documents/artisans/$(artisanId)).data;
+      return a.approvalStatus == 'approved' &&
+        a.verificationStatus in ['id_verified', 'trusted'];
+    }
+
+    function _isValidJobTransition(jobId) {
+      let job = getJob(jobId);
+      let cur = job.status;
+      let nxt = request.resource.data.status;
+      let uid = request.auth.uid;
+      let isCust = job.customerId == uid;
+      // Artisan check: uid must match the already-stored artisanId (no free-assignment)
+      let isArt = job.artisanId == uid;
+
+      return isAdmin() || (
+        (cur == 'requested'      && nxt == 'matched'        && isCust &&
+          request.resource.data.artisanId is string &&
+          request.resource.data.artisanId.size() > 0 &&
+          isArtisanEligible(request.resource.data.artisanId)) ||
+        (cur == 'matched'        && nxt == 'inChat'         && isCust) ||
+        (cur == 'inChat'         && nxt == 'paymentPending' && isCust) ||
+        (cur == 'paymentPending' && nxt == 'escrowLocked'   && (isAdmin() || isCust)) ||
+        (cur == 'escrowLocked'   && nxt == 'inProgress'     && isArt)  ||
+        (cur == 'inProgress'     && nxt == 'submitted'      && isArt)  ||
+        (cur == 'submitted'      && nxt == 'completed'      && isCust) ||
+        ((cur == 'escrowLocked' || cur == 'inProgress' || cur == 'submitted')
+                                 && nxt == 'disputed'       && isCust) ||
+        (cur == 'disputed'       && nxt == 'resolved'       && isAdmin()) ||
+        ((cur == 'requested' || cur == 'matched' || cur == 'inChat')
+                                 && nxt == 'cancelled'      && (isCust || isArt))
+      );
+    }
+
+    // ─── Payments ───────────────────────────────────────────────────────────
+    match /payments/{paymentId} {
+      allow read: if isSignedIn() && (
+        resource.data.payerId   == request.auth.uid ||
+        resource.data.artisanId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() &&
+        request.resource.data.payerId == request.auth.uid &&
+        request.resource.data.status in ['pending', 'escrowHeld'];
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ─── Reviews ────────────────────────────────────────────────────────────
+    // Only allow reviews on completed jobs. Reviewer must be the customer.
+    match /reviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() &&
+        request.resource.data.customerId == request.auth.uid &&
+        request.resource.data.rating is int &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5 &&
+        jobExists(request.resource.data.jobId) &&
+        getJob(request.resource.data.jobId).status == 'completed' &&
+        getJob(request.resource.data.jobId).customerId == request.auth.uid;
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    // ─── Disputes ───────────────────────────────────────────────────────────
+    match /disputes/{disputeId} {
+      allow read: if isSignedIn() && (
+        resource.data.raisedBy      == request.auth.uid ||
+        resource.data.againstUserId == request.auth.uid ||
+        isAdmin()
+      );
+      allow create: if isSignedIn() &&
+        request.resource.data.raisedBy == request.auth.uid &&
+        request.resource.data.status == 'open' &&
+        jobExists(request.resource.data.jobId) &&
+        getJob(request.resource.data.jobId).customerId == request.auth.uid &&
+        isJobParty(getJob(request.resource.data.jobId));
+      allow update: if isAdmin() ||
+        (resource.data.againstUserId == request.auth.uid &&
+          resource.data.status == 'open' &&
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['artisanResponseText', 'artisanEvidenceUrls', 'artisanRespondedAt']));
+      allow delete: if false;
+    }
+
+    // ─── Portfolio view analytics ────────────────────────────────────────────
+    // One doc per artisan, incremented by any signed-in viewer. Strictly
+    // monotonic + field-scoped to prevent tampering; only the artisan/admin
+    // can read the resulting counts (drives PortfolioManagerScreen).
+    match /portfolio_analytics/{artisanId} {
+      allow read: if isOwner(artisanId) || isAdmin();
+      allow create: if isSignedIn() &&
+        request.resource.data.keys().hasOnly(['viewCount', 'lastViewedAt']) &&
+        request.resource.data.viewCount is number &&
+        request.resource.data.viewCount > 0;
+      allow update: if isSignedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['viewCount', 'lastViewedAt']) &&
+        request.resource.data.viewCount is number &&
+        request.resource.data.viewCount > resource.data.viewCount;
+      allow delete: if false;
+    }
+
+    // ─── FCM push tokens (read only by Cloud Functions via Admin SDK) ───────
+    match /fcm_tokens/{uid} {
+      allow read:  if false;
+      allow write: if isOwner(uid);
+    }
+
+    // ─── Escrow release queue (processed by Cloud Function) ─────────────────
+    match /escrow_releases/{id} {
+      allow read: if isAdmin();
+      allow create: if isSignedIn() &&
+        jobExists(request.resource.data.jobId) &&
+        getJob(request.resource.data.jobId).customerId == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ─── Admins registry ────────────────────────────────────────────────────
+    match /admins/{uid} {
+      allow read:  if isAdmin();
+      allow write: if false;
+    }
+
+    // ─── Config (Paystack public key, feature flags, etc.) ──────────────────
+    match /config/{doc} {
+      allow read:  if isSignedIn();
+      allow write: if false;
+    }
+
+    // ─── Support tickets ────────────────────────────────────────────────────
+    match /support_tickets/{ticketId} {
+      allow read: if isSignedIn() && (
+        resource.data.userId == request.auth.uid || isAdmin()
+      );
+      allow create: if isSignedIn() &&
+        request.resource.data.userId == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ─── Notifications ──────────────────────────────────────────────────────
+    // Primarily admin-written (verification review, future Cloud Functions).
+    // Narrowly extended for the quote domain: a job party may notify the
+    // *other* party of a quote event, restricted to a known type whitelist
+    // and forced unread — this is not a general client-write escape hatch.
+    match /notifications/{notifId} {
+      allow read: if isOwner(resource.data.userId);
+      allow create: if isAdmin() ||
+        (isSignedIn() &&
+          request.resource.data.userId != request.auth.uid &&
+          request.resource.data.type in [
+            'quote_received', 'quote_accepted', 'quote_rejected', 'quote_withdrawn',
+            'dispute_raised', 'review_received'
+          ] &&
+          request.resource.data.isRead == false);
+      allow update: if isOwner(resource.data.userId) &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['isRead', 'readAt']);
+      allow delete: if false;
+    }
+
+    // ─── Artisan verifications (ID docs — admin review only) ─────────────────
+    match /verifications/{uid} {
+      allow read:  if isOwner(uid) || isAdmin();
+      allow create: if isOwner(uid);
+      // Artisan may resubmit only if previously rejected; admin may update freely
+      allow update: if isAdmin() ||
+        (isOwner(uid) && resource.data.status == 'rejected');
+      allow delete: if false;
+    }
+
+    // ─── Audit logs — collection group (cross-job admin queries) ─────────────
+    // Allows admins to query collectionGroup('auditLogs') across all jobs.
+    // Per-job rules above also allow job parties to read their own job's logs.
+    // The wildcard path rule coexists safely with the subcollection rule above —
+    // Firestore evaluates both and grants access if either matches.
+    match /{path=**}/auditLogs/{logId} {
+      allow read:   if isAdmin();
+      allow create: if false; // handled by the per-job subcollection rule
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "300219062368",
+    "project_id": "handytrust",
+    "storage_bucket": "handytrust.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:300219062368:android:93351eddb2b2634ef44b05",
+        "android_client_info": {
+          "package_name": "com.example.handy_trust"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "300219062368-5bq633a88o9llk2abhqs21eit7fvu7ko.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCDSSoYorameSPLEmGe62WeO9c4Y8Q5JDg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "300219062368-5bq633a88o9llk2abhqs21eit7fvu7ko.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "300219062368-7dn9b2qlqmui1o1anit12fvqs93hja87.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.handyTrust"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
