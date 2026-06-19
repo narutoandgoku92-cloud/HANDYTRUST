@@ -80,9 +80,35 @@ class StorageService {
         customMetadata: {'userId': userId, 'type': type},
       ),
     );
-    final url = await task.ref.getDownloadURL();
-    debugPrint('[StorageService] upload completed: $path');
+    // putData() resolving success doesn't guarantee the object is
+    // immediately readable — GCS can take a moment to propagate a
+    // just-finalized object, and getDownloadURL() called right after can
+    // throw [firebase_storage/object-not-found] even though the upload
+    // genuinely succeeded. Retry with backoff before giving up.
+    final url = await _getDownloadUrlWithRetry(task.ref, path);
+    debugPrint('[StorageService] upload completed: $path -> $url');
     return url;
+  }
+
+  Future<String> _getDownloadUrlWithRetry(
+    Reference ref,
+    String path, {
+    int attempts = 4,
+  }) async {
+    for (var i = 0; i < attempts; i++) {
+      try {
+        return await ref.getDownloadURL();
+      } on FirebaseException catch (e) {
+        final isLastAttempt = i == attempts - 1;
+        if (e.code != 'object-not-found' || isLastAttempt) {
+          debugPrint('[StorageService] getDownloadURL failed for $path: ${e.code}');
+          rethrow;
+        }
+        debugPrint('[StorageService] getDownloadURL retry ${i + 1}/$attempts for $path (object-not-found, propagation delay)');
+        await Future.delayed(Duration(milliseconds: 400 * (i + 1)));
+      }
+    }
+    throw StateError('unreachable');
   }
 
   /// Upload an artisan portfolio image.

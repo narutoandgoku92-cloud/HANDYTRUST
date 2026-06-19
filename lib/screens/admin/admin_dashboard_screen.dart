@@ -1118,7 +1118,17 @@ class _VerificationReviewCardState
         backgroundColor: Colors.black,
         insetPadding: const EdgeInsets.all(12),
         child: InteractiveViewer(
-          child: Image.network(url, fit: BoxFit.contain),
+          child: Image.network(
+            url,
+            fit: BoxFit.contain,
+            errorBuilder: (context, error, stack) {
+              debugPrint('[AdminVerification] full-screen image load failed for $url: $error');
+              return const Padding(
+                padding: EdgeInsets.all(32),
+                child: Icon(Icons.broken_image_outlined, color: Colors.white, size: 48),
+              );
+            },
+          ),
         ),
       ),
     );
@@ -2211,7 +2221,21 @@ class _VerificationThumb extends StatelessWidget {
               aspectRatio: 1,
               child: url.isEmpty
                   ? Container(color: context.colors.borderLight)
-                  : Image.network(url, fit: BoxFit.cover),
+                  : Image.network(
+                      url,
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stack) {
+                        debugPrint('[AdminVerification] image load failed for $url: $error');
+                        return Container(
+                          color: context.colors.borderLight,
+                          child: Icon(
+                            Icons.broken_image_outlined,
+                            color: context.colors.textTertiary,
+                            size: 20,
+                          ),
+                        );
+                      },
+                    ),
             ),
           ),
         ],
