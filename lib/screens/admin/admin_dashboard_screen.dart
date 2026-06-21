@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +13,7 @@ import '../../models/support_ticket_model.dart';
 import '../../models/user_model.dart';
 import '../../models/verification_model.dart';
 import '../../core/utils/safe_firestore.dart';
+import '../../providers/artisan_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/dispute_provider.dart';
 import '../../providers/quote_provider.dart';
@@ -389,11 +391,18 @@ class _ArtisanApplicationCardState extends State<_ArtisanApplicationCard> {
         'updatedAt': FieldValue.serverTimestamp(),
       };
 
-      batch.update(artisanRef, updates);
-      batch.update(userRef, {'updatedAt': FieldValue.serverTimestamp()});
+      // set(merge:true) instead of update() — update() throws if either
+      // doc doesn't exist, which would abort the WHOLE batch (a batch is
+      // all-or-nothing) and leave the application stuck un-reviewed with a
+      // raw Firestore error as the only feedback.
+      batch.set(artisanRef, updates, SetOptions(merge: true));
+      batch.set(userRef, {'updatedAt': FieldValue.serverTimestamp()}, SetOptions(merge: true));
       await batch.commit();
     } catch (e) {
-      if (mounted) setState(() => _error = e.toString());
+      debugPrint('[AdminDashboard] artisan approval update failed: $e');
+      if (mounted) {
+        setState(() => _error = 'Failed to update application: $e');
+      }
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -1656,17 +1665,87 @@ class _UsersTabState extends ConsumerState<_UsersTab> {
   }
 }
 
-class _UserListTile extends StatefulWidget {
+class _UserListTile extends ConsumerStatefulWidget {
   final UserModel user;
 
   const _UserListTile({required this.user});
 
   @override
-  State<_UserListTile> createState() => _UserListTileState();
+  ConsumerState<_UserListTile> createState() => _UserListTileState();
 }
 
-class _UserListTileState extends State<_UserListTile> {
+class _UserListTileState extends ConsumerState<_UserListTile> {
   bool _loading = false;
+  bool _deleting = false;
+
+  Future<void> _deleteUser() async {
+    final user = widget.user;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Delete User?',
+          style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          'This permanently deletes ${user.name}\'s account data'
+          '${user.isArtisan ? " and artisan profile" : ""}. This cannot be undone.',
+          style: const TextStyle(fontFamily: 'Inter'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: context.colors.error),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    setState(() => _deleting = true);
+    try {
+      final db = FirebaseFirestore.instance;
+      final batch = db.batch();
+      batch.delete(db.collection('users').doc(user.uid));
+      if (user.isArtisan) {
+        batch.delete(db.collection('artisans').doc(user.uid));
+      }
+      await batch.commit();
+      debugPrint('[AdminDashboard] deleted ${user.uid} from Firestore');
+
+      // Best-effort: disable the Auth account via Cloud Function. The
+      // Firestore deletion above already succeeded either way — the Auth
+      // side being unreachable (function not deployed yet, network) must
+      // not look like the whole delete failed.
+      try {
+        await FirebaseFunctions.instance
+            .httpsCallable('adminDeleteUser')
+            .call({'uid': user.uid});
+        debugPrint('[AdminDashboard] disabled Auth account for ${user.uid}');
+      } catch (e) {
+        debugPrint('[AdminDashboard] Auth disable failed for ${user.uid}: $e');
+        if (mounted) {
+          showErrorSnackbar(
+            context,
+            '${user.name} was removed, but their sign-in could not be disabled: $e',
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[AdminDashboard] deleteUser failed for ${user.uid}: $e');
+      if (mounted) showErrorSnackbar(context, 'Failed to delete user: $e');
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
 
   Future<void> _toggleSuspension() async {
     final user = widget.user;
@@ -1712,27 +1791,39 @@ class _UserListTileState extends State<_UserListTile> {
     setState(() => _loading = true);
     try {
       final batch = FirebaseFirestore.instance.batch();
-      batch.update(
+      batch.set(
         FirebaseFirestore.instance.collection('users').doc(user.uid),
         {'accountStatus': newStatus},
+        SetOptions(merge: true),
       );
       if (user.isArtisan) {
-        batch.update(
+        batch.set(
           FirebaseFirestore.instance.collection('artisans').doc(user.uid),
           {'accountStatus': newStatus},
+          SetOptions(merge: true),
         );
       }
       await batch.commit();
     } catch (e) {
+      debugPrint('[AdminDashboard] account status update failed: $e');
       if (mounted) showErrorSnackbar(context, 'Failed to update account: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
+  // Restructured from a single Row packing avatar + name/email + a fixed-
+  // width action button into one line — on narrower screens (and once a
+  // second action button was needed for delete) that Row overflowed,
+  // which renders as Flutter's diagonal-striped "RenderFlex overflowed"
+  // bar. Splitting into stacked rows (identity → chips → actions) keeps
+  // every element within the available width regardless of screen size.
   @override
   Widget build(BuildContext context) {
     final user = widget.user;
+    final artisan =
+        user.isArtisan ? ref.watch(artisanProfileProvider(user.uid)).value : null;
+    final busy = _loading || _deleting;
 
     return Container(
       padding: const EdgeInsets.all(14),
@@ -1741,71 +1832,97 @@ class _UserListTileState extends State<_UserListTile> {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: context.colors.borderLight),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            radius: 22,
-            backgroundColor: context.colors.primarySurface,
-            child: Text(
-              user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
-              style: TextStyle(
-                fontWeight: FontWeight.w700,
-                color: context.colors.primary,
-                fontFamily: 'Inter',
-              ),
-            ),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  user.name,
+          Row(
+            children: [
+              CircleAvatar(
+                radius: 22,
+                backgroundColor: context.colors.primarySurface,
+                child: Text(
+                  user.name.isNotEmpty ? user.name[0].toUpperCase() : '?',
                   style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: context.colors.textPrimary,
+                    fontWeight: FontWeight.w700,
+                    color: context.colors.primary,
                     fontFamily: 'Inter',
                   ),
                 ),
-                Text(
-                  user.email ?? user.roles.join(', '),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: context.colors.textSecondary,
-                    fontFamily: 'Inter',
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      user.name,
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: context.colors.textPrimary,
+                        fontFamily: 'Inter',
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      user.email ?? '—',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: context.colors.textSecondary,
+                        fontFamily: 'Inter',
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              if (user.isSuspended)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: context.colors.errorSurface,
+                    borderRadius: BorderRadius.circular(8),
                   ),
+                  child: Text(
+                    'Suspended',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: context.colors.error,
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 6,
+            children: [
+              for (final role in user.roles) _chip(context, role),
+              if (artisan != null) ...[
+                _chip(
+                  context,
+                  '${artisan.trustScore.toStringAsFixed(0)}/100 trust',
+                  icon: Icons.verified_outlined,
+                ),
+                _chip(
+                  context,
+                  'Verification: ${artisan.verificationStatus}',
+                  icon: Icons.fingerprint_rounded,
                 ),
               ],
-            ),
+            ],
           ),
-          if (user.isSuspended)
-            Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                color: context.colors.errorSurface,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                'Suspended',
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600,
-                  color: context.colors.error,
-                  fontFamily: 'Inter',
-                ),
-              ),
-            ),
-          _loading
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : OutlinedButton(
-                  onPressed: _toggleSuspension,
+          const SizedBox(height: 10),
+          Divider(height: 1, color: context.colors.borderLight),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: busy ? null : _toggleSuspension,
                   style: OutlinedButton.styleFrom(
                     foregroundColor: user.isSuspended
                         ? context.colors.accent
@@ -1816,12 +1933,65 @@ class _UserListTileState extends State<_UserListTile> {
                           : context.colors.error,
                     ),
                   ),
-                  child: Text(user.isSuspended ? 'Reactivate' : 'Suspend'),
+                  child: _loading
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : Text(user.isSuspended ? 'Reactivate' : 'Suspend'),
                 ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: busy ? null : _deleteUser,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: context.colors.error,
+                    side: BorderSide(color: context.colors.error),
+                  ),
+                  child: _deleting
+                      ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(
+                              strokeWidth: 2, color: context.colors.error),
+                        )
+                      : const Text('Delete'),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
+
+  Widget _chip(BuildContext context, String text, {IconData? icon}) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: context.colors.surfaceVariant,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 12, color: context.colors.textSecondary),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              text,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: context.colors.textSecondary,
+                fontFamily: 'Inter',
+              ),
+            ),
+          ],
+        ),
+      );
 }
 
 // ---------------------------------------------------------------------------
@@ -2151,10 +2321,13 @@ class _AdminReviewCardState extends ConsumerState<_AdminReviewCard> {
 
       final batch = db.batch();
       batch.delete(db.collection('reviews').doc(review.id));
-      batch.update(db.collection('artisans').doc(review.artisanId), {
+      // set(merge:true) instead of update() — the artisan doc may no longer
+      // exist if an admin deleted that account, which would otherwise abort
+      // this whole batch (including the review delete itself).
+      batch.set(db.collection('artisans').doc(review.artisanId), {
         'rating': newRating,
         'totalRatings': newCount,
-      });
+      }, SetOptions(merge: true));
       await batch.commit();
     } catch (e) {
       if (mounted) showErrorSnackbar(context, 'Delete failed: $e');
@@ -2452,14 +2625,13 @@ class _JobListTile extends ConsumerWidget {
                   Icons.person_outline_rounded,
                   customerName?.isNotEmpty == true ? customerName! : 'Customer',
                 ),
-                if (job.artisanId.isNotEmpty)
-                  _infoChip(
-                    context,
-                    Icons.handyman_outlined,
-                    artisanName?.isNotEmpty == true
-                        ? artisanName!
-                        : 'Artisan assigned',
-                  ),
+                _infoChip(
+                  context,
+                  Icons.handyman_outlined,
+                  job.artisanId.isEmpty
+                      ? 'Not accepted yet'
+                      : 'Accepted by: ${artisanName?.isNotEmpty == true ? artisanName! : job.artisanId}',
+                ),
                 if (job.budgetMin != null || job.budgetMax != null)
                   _infoChip(
                     context,
@@ -2512,7 +2684,7 @@ class _JobListTile extends ConsumerWidget {
 /// controls); mutations remain exclusively JobService's. Links out to the
 /// artisan's existing profile screen and surfaces quotes/dispute inline via
 /// already-existing providers rather than duplicating their UI.
-class _JobDetailSheet extends ConsumerWidget {
+class _JobDetailSheet extends ConsumerStatefulWidget {
   final JobModel job;
   final String? customerName;
   final String? artisanName;
@@ -2524,7 +2696,78 @@ class _JobDetailSheet extends ConsumerWidget {
   });
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_JobDetailSheet> createState() => _JobDetailSheetState();
+}
+
+class _JobDetailSheetState extends ConsumerState<_JobDetailSheet> {
+  bool _deleting = false;
+
+  // Hard delete — distinct from every other mutation here, which goes
+  // through JobService's state machine. Reserved for spam/fake job
+  // requests an admin wants gone entirely, not a status transition.
+  // Firestore rules already grant isAdmin() delete on /jobs; messages are
+  // cleaned up best-effort (rules now allow isAdmin() to delete them too)
+  // since deleting the job doc does not cascade-delete its subcollections.
+  Future<void> _deleteJob() async {
+    final job = widget.job;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Delete Job Request?',
+          style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w700),
+        ),
+        content: const Text(
+          'This permanently deletes the job and its chat history. Use this '
+          'only for spam or fake requests — this cannot be undone.',
+          style: TextStyle(fontFamily: 'Inter'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            style: FilledButton.styleFrom(backgroundColor: context.colors.error),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    setState(() => _deleting = true);
+    try {
+      final db = FirebaseFirestore.instance;
+      final jobRef = db.collection('jobs').doc(job.id);
+
+      final messages = await jobRef.collection('messages').get();
+      if (messages.docs.isNotEmpty) {
+        final msgBatch = db.batch();
+        for (final doc in messages.docs) {
+          msgBatch.delete(doc.reference);
+        }
+        await msgBatch.commit();
+      }
+
+      await jobRef.delete();
+      debugPrint('[AdminDashboard] deleted job ${job.id}');
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      debugPrint('[AdminDashboard] deleteJob failed for ${job.id}: $e');
+      if (mounted) showErrorSnackbar(context, 'Failed to delete job: $e');
+    } finally {
+      if (mounted) setState(() => _deleting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final job = widget.job;
+    final customerName = widget.customerName;
+    final artisanName = widget.artisanName;
     final quotesAsync = ref.watch(jobQuotesProvider(job.id));
     final disputeAsync = ref.watch(disputeForJobProvider(job.id));
 
@@ -2790,6 +3033,41 @@ class _JobDetailSheet extends ConsumerWidget {
               },
             ),
             const SizedBox(height: 24),
+            Divider(color: context.colors.borderLight),
+            const SizedBox(height: 14),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: _deleting ? null : _deleteJob,
+                icon: _deleting
+                    ? SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2, color: context.colors.error),
+                      )
+                    : Icon(Icons.delete_outline_rounded, color: context.colors.error),
+                label: Text(
+                  _deleting ? 'Deleting…' : 'Delete Job Request',
+                  style: TextStyle(color: context.colors.error, fontWeight: FontWeight.w600),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: BorderSide(color: context.colors.error),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Only for spam or fake job requests.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 11,
+                color: context.colors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
+            const SizedBox(height: 12),
           ],
         ),
       ),

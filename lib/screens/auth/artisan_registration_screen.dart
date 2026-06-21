@@ -60,7 +60,11 @@ class _ArtisanRegistrationScreenState extends ConsumerState<ArtisanRegistrationS
         'portfolioImageUrls': <String>[],
       };
 
-      await FirebaseFirestore.instance.collection('users').doc(firebaseUser.uid).update({
+      // set(merge:true) instead of update() — update() throws "not-found" if
+      // the /users doc hasn't landed yet (e.g. a slow write right after
+      // email verification), which surfaced to the artisan as a confusing
+      // "Failed to save profile" error with no way to recover except retry.
+      await FirebaseFirestore.instance.collection('users').doc(firebaseUser.uid).set({
         ...artisanFields,
         // arrayUnion (not a plain overwrite) so an existing customer role
         // survives — accounts can hold both roles and switch between them.
@@ -69,7 +73,7 @@ class _ArtisanRegistrationScreenState extends ConsumerState<ArtisanRegistrationS
         'responseRatePercent': 100.0,
         'cancellationRatePercent': 0.0,
         'openDisputeCount': 0,
-      });
+      }, SetOptions(merge: true));
 
       // Create the artisans collection document — includes name for display
       await FirebaseFirestore.instance.collection('artisans').doc(firebaseUser.uid).set({

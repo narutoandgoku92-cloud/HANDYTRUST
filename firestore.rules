@@ -29,6 +29,17 @@ service cloud.firestore {
              request.auth.uid == jobData.artisanId;
     }
 
+    // Cheap "is this uid a registered artisan" check — true from the moment
+    // of artisan registration (artisans/{uid} create), regardless of
+    // approvalStatus/verificationStatus. Used to gate FEED VISIBILITY only.
+    // Eligibility to actually be hired/quote remains isArtisanEligible()
+    // (approved + verified) — unverified artisans must see the open jobs
+    // feed (so they know jobs exist and aren't blocked from the app), they
+    // just can't act on it until verified.
+    function isArtisanAccount(uid) {
+      return exists(/databases/$(database)/documents/artisans/$(uid));
+    }
+
     // ─── Users ──────────────────────────────────────────────────────────────
     // Only the owner or admin can read a profile.
     // Anonymous and cross-user reads are blocked to protect phone numbers / PII.
@@ -72,7 +83,7 @@ service cloud.firestore {
                      'openDisputeCount', 'responseRatePercent',
                      'accountStatus']) &&
           (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['verificationStatus']) ||
-            request.resource.data.verificationStatus in ['unverified', 'id_submitted']));
+            request.resource.data.verificationStatus in ['unverified', 'id_submitted', 'pending_later']));
       allow delete: if isAdmin();
     }
 
@@ -90,7 +101,7 @@ service cloud.firestore {
       allow read: if isSignedIn() && (
         resource.data.customerId == request.auth.uid ||
         resource.data.artisanId  == request.auth.uid ||
-        (resource.data.status == 'requested' && isArtisanEligible(request.auth.uid)) ||
+        (resource.data.status == 'requested' && isArtisanAccount(request.auth.uid)) ||
         isAdmin()
       );
 
@@ -142,7 +153,9 @@ service cloud.firestore {
         allow update: if isSignedIn() &&
           request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['isRead']);
-        allow delete: if false;
+        // Admin-only — used when an admin deletes a spam/fake job and
+        // cleans up its chat thread. No non-admin may ever delete a message.
+        allow delete: if isAdmin();
       }
 
       // ─── Quotes (sub-collection per job) ─────────────────────────────────
@@ -362,9 +375,11 @@ service cloud.firestore {
     match /verifications/{uid} {
       allow read:  if isOwner(uid) || isAdmin();
       allow create: if isOwner(uid);
-      // Artisan may resubmit only if previously rejected; admin may update freely
+      // Artisan may resubmit if previously rejected, OR upgrade from a
+      // "Verify Later" deferral (pending_later) to a real submission with
+      // documents. Admin may update freely.
       allow update: if isAdmin() ||
-        (isOwner(uid) && resource.data.status == 'rejected');
+        (isOwner(uid) && resource.data.status in ['rejected', 'pending_later']);
       allow delete: if false;
     }
 

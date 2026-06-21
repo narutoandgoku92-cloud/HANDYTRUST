@@ -35,8 +35,11 @@ class StorageService {
       customMetadata: {'jobId': jobId, 'userId': userId, 'index': '$index'},
     );
 
+    debugPrint('[StorageService] upload started: $path (${bytes.lengthInBytes} bytes)');
     final task = await ref.putData(bytes, metadata);
-    return await task.ref.getDownloadURL();
+    final url = await _getDownloadUrlWithRetry(task.ref, path);
+    debugPrint('[StorageService] upload completed: $path -> $url');
+    return url;
   }
 
   /// Upload a profile photo.
@@ -49,11 +52,14 @@ class StorageService {
     }
     final path = 'users/$userId/profile.jpg';
     final ref = _storage.ref(path);
+    debugPrint('[StorageService] upload started: $path (${bytes.lengthInBytes} bytes)');
     final task = await ref.putData(
       bytes,
       SettableMetadata(contentType: 'image/jpeg'),
     );
-    return await task.ref.getDownloadURL();
+    final url = await _getDownloadUrlWithRetry(task.ref, path);
+    debugPrint('[StorageService] upload completed: $path -> $url');
+    return url;
   }
 
   /// Upload a verification photo (selfie or government ID).
@@ -123,11 +129,14 @@ class StorageService {
     }
     final path = 'artisan_portfolio/$artisanId/image_$index.jpg';
     final ref = _storage.ref(path);
+    debugPrint('[StorageService] upload started: $path (${bytes.lengthInBytes} bytes)');
     final task = await ref.putData(
       bytes,
       SettableMetadata(contentType: 'image/jpeg'),
     );
-    return await task.ref.getDownloadURL();
+    final url = await _getDownloadUrlWithRetry(task.ref, path);
+    debugPrint('[StorageService] upload completed: $path -> $url');
+    return url;
   }
 
   /// Delete a portfolio image given its download URL.
@@ -146,10 +155,13 @@ class StorageService {
     }
     final path = 'disputes/$disputeId/$userId/evidence_$index.jpg';
     final ref = _storage.ref(path);
+    debugPrint('[StorageService] upload started: $path (${bytes.lengthInBytes} bytes)');
     final task = await ref.putData(
       bytes,
       SettableMetadata(contentType: 'image/jpeg'),
     );
-    return await task.ref.getDownloadURL();
+    final url = await _getDownloadUrlWithRetry(task.ref, path);
+    debugPrint('[StorageService] upload completed: $path -> $url');
+    return url;
   }
 }

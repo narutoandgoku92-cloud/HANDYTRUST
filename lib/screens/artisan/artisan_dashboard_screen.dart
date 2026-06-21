@@ -79,16 +79,35 @@ class _DashboardBody extends ConsumerWidget {
     );
   }
 
-  Future<void> _toggleAvailability(WidgetRef ref, bool current) async {
+  // Previously had no try/catch at all — a transient write failure threw
+  // uncaught out of an async Switch.onChanged callback (silent in release
+  // builds, a debug-mode crash dialog otherwise), and used .update() which
+  // throws on a missing doc instead of degrading gracefully like every
+  // other write in this app.
+  Future<void> _toggleAvailability(
+    BuildContext context,
+    WidgetRef ref,
+    bool current,
+  ) async {
     final firestore = FirebaseFirestore.instance;
-    await Future.wait([
-      firestore.collection('artisans').doc(userId).update({
-        'isAvailable': !current,
-      }),
-      firestore.collection('users').doc(userId).update({
-        'isAvailable': !current,
-      }),
-    ]);
+    try {
+      final batch = firestore.batch();
+      batch.set(firestore.collection('artisans').doc(userId),
+          {'isAvailable': !current}, SetOptions(merge: true));
+      batch.set(firestore.collection('users').doc(userId),
+          {'isAvailable': !current}, SetOptions(merge: true));
+      await batch.commit();
+    } catch (e) {
+      debugPrint('[ArtisanDashboard] toggleAvailability failed: $e');
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not update availability: $e'),
+            backgroundColor: context.colors.error,
+          ),
+        );
+      }
+    }
   }
 
   Widget _buildHeader(BuildContext context, WidgetRef ref) =>
@@ -241,7 +260,8 @@ class _DashboardBody extends ConsumerWidget {
               ),
               Switch(
                 value: artisan.isAvailable,
-                onChanged: (_) => _toggleAvailability(ref, artisan.isAvailable),
+                onChanged: (_) =>
+                    _toggleAvailability(context, ref, artisan.isAvailable),
                 activeThumbColor: context.colors.accent,
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
               ),
@@ -265,6 +285,15 @@ class _DashboardBody extends ConsumerWidget {
               title: 'Verify Your Identity',
               subtitle: 'Upload your selfie and ID to earn the Verified badge.',
               actionLabel: 'Verify',
+            ),
+          VerificationStatus.pendingLater => _VerificationCardSpec(
+              icon: Icons.schedule_outlined,
+              color: context.colors.warning,
+              surface: context.colors.warningSurface,
+              title: 'Verification Deferred',
+              subtitle:
+                  'You can keep using the app. Verify anytime to earn the Verified badge and unlock quoting.',
+              actionLabel: 'Verify Now',
             ),
           VerificationStatus.pending => _VerificationCardSpec(
               icon: Icons.hourglass_top_rounded,
@@ -356,31 +385,33 @@ class _DashboardBody extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
           child: Column(
             children: [
-              // Only an approved + verified artisan can submit quotes —
-              // mirrors the Firestore isArtisanEligible() gate on /quotes.
-              if (artisan.approvalStatus == 'approved' &&
-                  (artisan.verificationStatus == 'id_verified' ||
-                      artisan.verificationStatus == 'trusted')) ...[
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: () => context.push(
-                      '/open-jobs',
-                      extra: {'category': artisan.category ?? ''},
-                    ),
-                    icon: const Icon(Icons.work_outline_rounded, size: 18),
-                    label: const Text('Browse Open Jobs'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: context.colors.primary,
-                      foregroundColor: context.colors.textInverse,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ),
+              // Browsing the open jobs feed is allowed for any registered
+              // artisan (mirrors firestore.rules' isArtisanAccount() read
+              // gate) — only *quoting*/*being matched* still requires
+              // approved + verified (isArtisanEligible(), enforced both in
+              // the quotes rule and inside QuoteService). Gating this entry
+              // point on full eligibility previously meant most artisans —
+              // anyone not yet approved+verified, including every brand-new
+              // signup — had no way to ever see a job request at all.
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  onPressed: () => context.push(
+                    '/open-jobs',
+                    extra: {'category': artisan.category ?? ''},
+                  ),
+                  icon: const Icon(Icons.work_outline_rounded, size: 18),
+                  label: const Text('Browse Open Jobs'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: context.colors.primary,
+                    foregroundColor: context.colors.textInverse,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
                   ),
                 ),
-                const SizedBox(height: 10),
-              ],
+              ),
+              const SizedBox(height: 10),
               SizedBox(
                 width: double.infinity,
                 child: OutlinedButton.icon(

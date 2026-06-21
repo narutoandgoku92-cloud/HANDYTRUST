@@ -262,7 +262,15 @@ class _ServiceRequestScreenState extends ConsumerState<ServiceRequestScreen> {
     if (state.success) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Job posted! Choose an artisan.')),
+        SnackBar(
+          content: Text(
+            state.failedImageCount > 0
+                ? 'Job posted! ${state.failedImageCount} photo'
+                    '${state.failedImageCount == 1 ? '' : 's'} failed to upload '
+                    'but your request was still submitted.'
+                : 'Job posted! Choose an artisan.',
+          ),
+        ),
       );
       context.push(
         '/artisans/${state.createdJobId}',

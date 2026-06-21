@@ -30,6 +30,7 @@ class _VerificationUploadScreenState
   bool _uploading = false;
   bool _processingSelfie = false;
   bool _processingId = false;
+  bool _deferring = false;
 
   VerificationModel? _existing;
   bool _checking = true;
@@ -202,6 +203,48 @@ class _VerificationUploadScreenState
     }
   }
 
+  // "Verify Later" — the explicit non-blocking escape hatch. Skips the
+  // upload requirement entirely (no Storage call, no /verifications doc)
+  // and just flags the artisan's account as deferred so onboarding can
+  // continue. Reachable both as a deliberate choice and as the fallback
+  // when uploads keep failing — it's a permanent secondary action on this
+  // screen rather than something that only appears after a failure, so a
+  // flaky connection never strands the artisan with no way forward.
+  Future<void> _verifyLater() async {
+    if (_deferring) return;
+    final user = ref.read(currentUserProvider).asData?.value;
+    if (user == null) {
+      showErrorSnackbar(
+          context, 'Your session could not be verified. Please sign in again.');
+      return;
+    }
+
+    setState(() => _deferring = true);
+    try {
+      debugPrint('[VerificationUpload] deferring verification for ${user.uid}');
+      await ref.read(verificationServiceProvider).deferVerification(user.uid);
+      debugPrint('[VerificationUpload] verification deferred for ${user.uid}');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+                'You can verify your identity later from your dashboard.'),
+            backgroundColor: context.colors.accent,
+          ),
+        );
+        context.pop();
+      }
+    } catch (e) {
+      debugPrint('[VerificationUpload] deferVerification failed for ${user.uid}: $e');
+      if (mounted) {
+        showErrorSnackbar(
+            context, 'Could not save your choice. Please try again.');
+      }
+    } finally {
+      if (mounted) setState(() => _deferring = false);
+    }
+  }
+
   void _showIdSourcePicker() {
     showModalBottomSheet(
       context: context,
@@ -259,10 +302,13 @@ class _VerificationUploadScreenState
                     uploading: _uploading,
                     processingSelfie: _processingSelfie,
                     processingId: _processingId,
+                    deferring: _deferring,
                     onTakeSelfie: _takeSelfie,
                     onPickId: _showIdSourcePicker,
                     onSubmit: _submit,
+                    onVerifyLater: _verifyLater,
                     isRejected: _existing?.status == VerificationStatus.rejected,
+                    isDeferred: _existing?.status == VerificationStatus.pendingLater,
                     rejectionReason: _existing?.rejectionReason,
                   ),
       ),
@@ -328,10 +374,13 @@ class _UploadForm extends StatelessWidget {
   final bool uploading;
   final bool processingSelfie;
   final bool processingId;
+  final bool deferring;
   final VoidCallback onTakeSelfie;
   final VoidCallback onPickId;
   final VoidCallback onSubmit;
+  final VoidCallback onVerifyLater;
   final bool isRejected;
+  final bool isDeferred;
   final String? rejectionReason;
 
   const _UploadForm({
@@ -340,10 +389,13 @@ class _UploadForm extends StatelessWidget {
     required this.uploading,
     required this.processingSelfie,
     required this.processingId,
+    required this.deferring,
     required this.onTakeSelfie,
     required this.onPickId,
     required this.onSubmit,
+    required this.onVerifyLater,
     required this.isRejected,
+    required this.isDeferred,
     this.rejectionReason,
   });
 
@@ -372,6 +424,33 @@ class _UploadForm extends StatelessWidget {
                     style: TextStyle(
                       fontSize: 13,
                       color: context.colors.error,
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (isDeferred && !isRejected) ...[
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: context.colors.accentSurface,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: context.colors.accent.withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.schedule_outlined, color: context.colors.accent, size: 20),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'You chose to verify later. Complete it anytime — submitting below replaces that choice.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: context.colors.accent,
                       fontFamily: 'Inter',
                     ),
                   ),
@@ -437,7 +516,8 @@ class _UploadForm extends StatelessWidget {
                   idBytes == null ||
                   uploading ||
                   processingSelfie ||
-                  processingId)
+                  processingId ||
+                  deferring)
               ? null
               : onSubmit,
           style: ElevatedButton.styleFrom(
@@ -464,9 +544,29 @@ class _UploadForm extends StatelessWidget {
                   ),
                 ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
+        TextButton(
+          onPressed: (uploading || deferring) ? null : onVerifyLater,
+          child: deferring
+              ? SizedBox(
+                  height: 16,
+                  width: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: context.colors.textSecondary),
+                )
+              : Text(
+                  'Verify Later',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: context.colors.textSecondary,
+                    fontFamily: 'Inter',
+                  ),
+                ),
+        ),
+        const SizedBox(height: 8),
         Text(
-          'Your documents are stored securely and only viewed by our verification team.',
+          'You can keep using the app and complete verification anytime from your dashboard.',
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 12,

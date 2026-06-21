@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/services/quote_service.dart';
 import '../core/utils/safe_firestore.dart';
@@ -46,6 +47,15 @@ final openJobsFeedProvider = StreamProvider.family<List<JobModel>, String>(
           .where('category', isEqualTo: category),
       (d) => JobModel.fromJson({...d.data(), 'id': d.id}),
       debugLabel: 'openJobsFeed:$category',
-    ).map((jobs) => jobs..sort((a, b) => b.createdAt.compareTo(a.createdAt)));
+    ).map((jobs) {
+      // safeStream already distinguishes BLOCKED (permission-denied) vs
+      // ERROR vs OK in its own log; this adds the category-specific "OK but
+      // genuinely nothing to show" case so an empty feed never looks the
+      // same as a silently-blocked one in debug output.
+      if (jobs.isEmpty) {
+        debugPrint('[openJobsFeed:$category] EMPTY — no open jobs in this category right now');
+      }
+      return jobs..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    });
   },
 );

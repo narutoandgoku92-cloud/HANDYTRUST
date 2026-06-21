@@ -51,12 +51,26 @@ Stream<List<T>> safeStream<T>(
   T Function(QueryDocumentSnapshot<Map<String, dynamic>> doc) fromJson, {
   String? debugLabel,
 }) {
-  return query.snapshots().map((snap) => safeQueryParse(snap, fromJson)).transform(
+  final label = debugLabel != null ? ":$debugLabel" : "";
+  return query.snapshots().map((snap) {
+    final result = safeQueryParse(snap, fromJson);
+    debugPrint('[safeStream$label] OK — ${result.length} document(s)');
+    return result;
+  }).transform(
         StreamTransformer<List<T>, List<T>>.fromHandlers(
           handleError: (Object error, StackTrace stackTrace, sink) {
+            // Distinguish "blocked by security rules" from any other
+            // stream-level failure so debug logs make the actual cause
+            // obvious instead of an indistinguishable empty list — a
+            // permission-denied here almost always means the rule
+            // evaluation rejected the WHOLE query (e.g. a collection query
+            // where the rule can't be satisfied for every matched doc),
+            // not "the data genuinely doesn't exist."
+            final isPermissionDenied =
+                error is FirebaseException && error.code == 'permission-denied';
             debugPrint(
-              '[safeStream${debugLabel != null ? ":$debugLabel" : ""}] '
-              'stream error swallowed, emitting empty list: $error\n$stackTrace',
+              '[safeStream$label] ${isPermissionDenied ? "BLOCKED (permission-denied)" : "ERROR"} '
+              '— emitting empty list: $error\n$stackTrace',
             );
             sink.add(const []);
           },

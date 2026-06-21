@@ -539,3 +539,37 @@ exports.analyzeJob = onCall(
     return { suggestedCategory, confidence, enhancedDescription };
   }
 );
+
+// ─── Admin: disable a deleted user's Auth account ──────────────────────────
+// The admin dashboard's "Delete User" action removes the Firestore docs
+// directly (covered by firestore.rules' isAdmin() delete rule), but the
+// client SDK cannot touch another user's Auth account — only the Admin SDK
+// can. This callable does only that narrow step. Authorization mirrors
+// firestore.rules' isAdmin(): existence of an /admins/{uid} doc, the same
+// source of truth the rest of the app already relies on.
+exports.adminDeleteUser = onCall(async (request) => {
+  if (!request.auth) {
+    throw new Error('Sign in required.');
+  }
+  const adminDoc = await db.collection('admins').doc(request.auth.uid).get();
+  if (!adminDoc.exists) {
+    throw new Error('Admin privileges required.');
+  }
+
+  const uid = request.data?.uid;
+  if (typeof uid !== 'string' || uid.length === 0) {
+    throw new Error('uid is required.');
+  }
+
+  try {
+    await admin.auth().updateUser(uid, { disabled: true });
+  } catch (err) {
+    // already deleted / never existed in Auth (e.g. legacy Firestore-only
+    // row) — not a failure from the caller's point of view.
+    if (err.code !== 'auth/user-not-found') {
+      throw err;
+    }
+  }
+
+  return { success: true };
+});

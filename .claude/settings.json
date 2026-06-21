@@ -27,7 +27,10 @@
       "Bash(grep -n 'Error: $e\\\\|'\\\\''No artisans found'\\\\''\\\\|'\\\\''No users found'\\\\''\\\\|'\\\\''No reviews yet'\\\\''\\\\|'\\\\''No support tickets'\\\\''' lib/screens/admin/admin_dashboard_screen.dart)",
       "Bash(grep -n 'Error: $e\\\\|'\\\\''No users found'\\\\''\\\\|'\\\\''No reviews yet'\\\\''\\\\|'\\\\''No support tickets'\\\\''' lib/screens/admin/admin_dashboard_screen.dart)",
       "Bash(grep -n 'Error: $e\\\\|'\\\\''No support tickets'\\\\''\\\\|'\\\\''No reviews yet'\\\\''' lib/screens/admin/admin_dashboard_screen.dart)",
-      "Bash(dart format *)"
+      "Bash(dart format *)",
+      "Bash(ls assets/images)",
+      "Bash(ls assets *)",
+      "Bash(find . -maxdepth 2 -iname \"*screenshot*\")"
     ],
     "additionalDirectories": [
       "c:\\Users\\gbola\\.claude\\projects\\c--Users-gbola-OneDrive-Pictures-flutter-handy-trust\\memory"

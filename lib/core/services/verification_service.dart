@@ -54,6 +54,35 @@ class VerificationService {
     debugPrint('[VerificationService] firestore write completed for $uid');
   }
 
+  /// Artisan defers verification ("Verify Later") — no upload required.
+  /// Writes the coarse status flag on artisans/users AND a placeholder
+  /// `verifications/{uid}` record (status: pending_later, no documents)
+  /// via merge-set so every write degrades gracefully instead of throwing
+  /// on a missing doc. The placeholder record is what lets
+  /// [verificationStatusProvider] (and the admin dashboard) distinguish
+  /// "deferred" from "never started" without a second read — and its
+  /// `status: 'pending_later'` is exactly what firestore.rules' updated
+  /// `/verifications/{uid}` rule expects so [submit] can later upgrade it
+  /// to a real submission.
+  Future<void> deferVerification(String uid) async {
+    final ref = _verificationRef(uid);
+    final artisanRef = _db.collection('artisans').doc(uid);
+    final userRef = _db.collection('users').doc(uid);
+
+    debugPrint('[VerificationService] deferring verification for $uid');
+
+    final batch = _db.batch();
+    batch.set(ref, {
+      'uid': uid,
+      'status': 'pending_later',
+    }, SetOptions(merge: true));
+    batch.set(artisanRef, {'verificationStatus': 'pending_later'}, SetOptions(merge: true));
+    batch.set(userRef, {'verificationStatus': 'pending_later'}, SetOptions(merge: true));
+    await batch.commit();
+
+    debugPrint('[VerificationService] verification deferred for $uid');
+  }
+
   /// Admin approves — verification record + artisan's coarse status move
   /// together, atomically, and a notification is queued for the artisan.
   Future<void> approve({

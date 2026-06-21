@@ -5,13 +5,23 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 /// review state; [status] is intentionally a narrower vocabulary than
 /// [ArtisanModel.verificationStatus] (which also tracks pre-submission and
 /// post-approval trust tiers for badge display).
-enum VerificationStatus { pending, approved, rejected }
+enum VerificationStatus { pending, approved, rejected, pendingLater }
 
 VerificationStatus _statusFromString(String? v) => switch (v) {
       'approved' => VerificationStatus.approved,
       'rejected' => VerificationStatus.rejected,
+      'pending_later' => VerificationStatus.pendingLater,
       _ => VerificationStatus.pending,
     };
+
+extension VerificationStatusJson on VerificationStatus {
+  String toJsonValue() => switch (this) {
+        VerificationStatus.approved => 'approved',
+        VerificationStatus.rejected => 'rejected',
+        VerificationStatus.pendingLater => 'pending_later',
+        VerificationStatus.pending => 'pending',
+      };
+}
 
 class VerificationModel {
   final String uid;
@@ -54,6 +64,6 @@ class VerificationModel {
         if (reviewedAt != null) 'reviewedAt': Timestamp.fromDate(reviewedAt!),
         if (reviewerId != null) 'reviewerId': reviewerId,
         if (rejectionReason != null) 'rejectionReason': rejectionReason,
-        'status': status.name,
+        'status': status.toJsonValue(),
       };
 }
